@@ -28,8 +28,7 @@ link: https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE78220
 5. Dataset relevant for step 3 (PD, CR response):
 GSE78220_series_matrix.txt
 link: https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE78220
-
-6. 
+ 
 
 These datasets are from paper: \\
 Hugo et al. 2016. PubMed identifier PMID: 26997480
