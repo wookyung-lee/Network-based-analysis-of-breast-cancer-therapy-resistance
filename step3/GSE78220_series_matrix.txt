@@ -1,4 +1,4 @@
-!Series_title	"mRNA expressions in pre-treatment melanomas undergoing anti-PD-1 checkpoint inhibition therapy"
+patient id!Series_title	"mRNA expressions in pre-treatment melanomas undergoing anti-PD-1 checkpoint inhibition therapy"
 !Series_geo_accession	"GSE78220"
 !Series_status	"Public on Mar 18 2016"
 !Series_submission_date	"Feb 23 2016"
