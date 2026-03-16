@@ -1,27 +1,47 @@
----
-
-### 2. The Download Script (`setup_data.sh`)
-This script creates the data directory, downloads the compressed files from the NCBI FTP servers, and extracts them.
-
-```bash
 #!/bin/bash
+set -euo pipefail
 
-# Create data directory if it doesn't exist
-mkdir -p other_dataset
+mkdir -p other_dataset step2
 
-echo "--- Starting Data Download for Melanoma Project ---"
+echo "--- Starting Data Download ---"
 
-# 1. GSE162187 (The primary dataset)
-echo "Fetching GSE162187..."
-wget -P other_dataset/ https://ftp.ncbi.nlm.nih.gov/geo/series/GSE162nnn/GSE162187/suppl/GSE162187_norm_counts_TPM_GRCh38.p13_NCBI.tsv.gz
-wget -P other_dataset/ https://ftp.ncbi.nlm.nih.gov/geo/series/GSE162nnn/GSE162187/suppl/GSE162187_raw_counts_GRCh38.p13_NCBI.tsv.gz
+# -- 1. GSE162187 TPM counts ---------------------------------------------------
+echo ""
+echo "Fetching GSE162187 TPM counts..."
+wget -O other_dataset/GSE162187_norm_counts_TPM_GRCh38.p13_NCBI.tsv.gz \
+    "https://www.ncbi.nlm.nih.gov/geo/download/?type=rnaseq_counts&acc=GSE162187&format=file&file=GSE162187_norm_counts_TPM_GRCh38.p13_NCBI.tsv.gz"
 
-# 2. GSE78220 (The validation dataset)
-echo "Fetching GSE78220..."
-wget -P other_dataset/ https://ftp.ncbi.nlm.nih.gov/geo/series/GSE78nnn/GSE78220/suppl/GSE78220_norm_counts_TPM_GRCh38.p13_NCBI.tsv.gz
+# -- 2. GSE162187 raw counts ---------------------------------------------------
+echo ""
+echo "Fetching GSE162187 raw counts..."
+wget -O other_dataset/GSE162187_raw_counts_GRCh38.p13_NCBI.tsv.gz \
+    "https://www.ncbi.nlm.nih.gov/geo/download/?type=rnaseq_counts&acc=GSE162187&format=file&file=GSE162187_raw_counts_GRCh38.p13_NCBI.tsv.gz"
 
-# Decompress files
-echo "Decompressing files..."
-gunzip other_dataset/*.gz
+# -- 3. GSE162187 series matrix (sample metadata) ------------------------------
+echo ""
+echo "Fetching GSE162187 series matrix..."
+wget -P other_dataset/ https://ftp.ncbi.nlm.nih.gov/geo/series/GSE162nnn/GSE162187/matrix/GSE162187_series_matrix.txt.gz
 
-echo "--- Setup Complete. Data is located in /other_dataset ---"
+# -- 5. Decompress GEO files ---------------------------------------------------
+echo ""
+echo "Decompressing GEO files..."
+for f in other_dataset/*.gz; do
+    [ -f "$f" ] && gunzip -v "$f"
+done
+
+# -- 6. STRING database v12.0 (human, taxon 9606) ------------------------------
+echo ""
+echo "Fetching STRING v12.0 files..."
+wget -P other_dataset/ https://stringdb-downloads.org/download/protein.links.v12.0/9606.protein.links.v12.0.txt.gz
+wget -P other_dataset/ https://stringdb-downloads.org/download/protein.info.v12.0/9606.protein.info.v12.0.txt.gz
+
+echo "Decompressing STRING files..."
+gunzip other_dataset/9606.protein.links.v12.0.txt.gz
+gunzip other_dataset/9606.protein.info.v12.0.txt.gz
+
+# -- Summary -------------------------------------------------------------------
+echo ""
+echo "--- Setup Complete ---"
+echo ""
+echo "other_dataset/ contains:"
+ls -lh other_dataset/

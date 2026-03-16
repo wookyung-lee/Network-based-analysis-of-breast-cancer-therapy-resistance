@@ -102,8 +102,8 @@ if __name__ == "__main__":
     filtered_genes = map_entrez_to_symbols(filtered_genes)
     filtered_genes, G = build_pruned_network(
         filtered_genes,
-        links_path="step2/9606.protein.links.v12.0.txt",
-        info_path="step2/9606.protein.info.v12.0.txt",
+        links_path="other_dataset/9606.protein.links.v12.0.txt",
+        info_path="other_dataset/9606.protein.info.v12.0.txt",
     )
 
     print("--- Saving results to cache ---")
