@@ -153,11 +153,11 @@ def plot_core_network(
     )
 
     plt.colorbar(sc, ax=ax, label="log2FC  (red = higher in Sensitive, blue = higher in Resistant)")
-    ax.set_title(
-        f"Core Network — {core_net.number_of_nodes()} nodes, "
-        f"{core_net.number_of_edges()} edges\nNode size ∝ score",
-        fontsize=13,
-    )
+    # ax.set_title(
+    #     f"Core Network — {core_net.number_of_nodes()} nodes, "
+    #     f"{core_net.number_of_edges()} edges\nNode size ∝ score",
+    #     fontsize=13,
+    # )
     ax.axis("off")
     plt.tight_layout()
 

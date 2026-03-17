@@ -104,9 +104,9 @@ def plot_kegg_enrichment(
     ax.barh(sig_sorted["Term"], sig_sorted["-log10(Adj.P)"],
             color="tomato", edgecolor="white")
     ax.axvline(-np.log10(0.05), color="grey", linestyle="--",
-               linewidth=0.9, label="adj. p = 0.05")
-    ax.set_xlabel("-log10(Adjusted P-value)")
-    ax.set_title("KEGG Pathway Enrichment — Core Network Genes")
+               linewidth=0.9, label="$p_{adj} = 0.05$")
+    ax.set_xlabel("$-\log_{10}(p_{adj})$")
+    # ax.set_title("KEGG Pathway Enrichment — Core Network Genes")
     ax.legend()
     plt.tight_layout()
 

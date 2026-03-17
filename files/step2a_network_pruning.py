@@ -65,6 +65,7 @@ def build_pruned_network(
     """
     print(f"--- Loading STRING data from {links_path} ---")
     links = pd.read_csv(links_path, sep=" ")
+    # links = links[links["combined_score"] > 700]
     info  = pd.read_csv(info_path, sep="\t")[["#string_protein_id", "preferred_name"]]
     info.columns = ["string_id", "symbol"]
 

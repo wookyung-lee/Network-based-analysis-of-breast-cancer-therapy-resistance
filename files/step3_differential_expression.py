@@ -33,7 +33,9 @@ from scipy.stats import mannwhitneyu
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from statsmodels.stats.multitest import multipletests
-
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.default_inference import DefaultInference
+from pydeseq2.ds import DeseqStats
 import cache
 
 EPS = 1e-6
@@ -84,62 +86,119 @@ def parse_series_matrix(filepath: str) -> tuple[dict, list, list]:
 # 3.2  Differential expression — p-values and log2FC
 # ---------------------------------------------------------------------------
 
+# def compute_differential_expression(
+#     counts_path: str,
+#     filtered_genes: pd.DataFrame,
+#     resistant_gsm: list,
+#     sensitive_gsm: list,
+# ) -> pd.DataFrame:
+#     """
+#     For every gene that survived the TPM filter, run a Mann-Whitney U test
+#     (Sensitive vs Resistant) and calculate log2FC.  Applies BH correction.
+#
+#     Returns
+#     -------
+#     filtered_genes : input DataFrame extended with log2FC, pval, pval_adj
+#     counts         : expression matrix (genes × samples) used for the test
+#     """
+#     counts = pd.read_csv(counts_path, sep="\t")
+#     counts = counts[counts["GeneID"].isin(filtered_genes["GeneID"])].set_index("GeneID")
+#
+#     res_cols = [c for c in counts.columns if c in resistant_gsm]
+#     sen_cols = [c for c in counts.columns if c in sensitive_gsm]
+#     print(f"Resistant columns: {len(res_cols)}  |  Sensitive columns: {len(sen_cols)}")
+#
+#     pvals, log2fc = [], []
+#
+#     for gene in counts.index:
+#         res_expr = counts.loc[gene, res_cols].values.astype(float)
+#         sen_expr = counts.loc[gene, sen_cols].values.astype(float)
+#
+#         fc = np.log2((np.mean(sen_expr) + EPS) / (np.mean(res_expr) + EPS))
+#         log2fc.append(fc)
+#
+#         try:
+#             _, p = mannwhitneyu(sen_expr, res_expr, alternative="two-sided")
+#         except ValueError:
+#             p = 1.0
+#         pvals.append(p)
+#
+#     _, pvals_adj, _, _ = multipletests(pvals, method="fdr_bh")
+#
+#     stat_df = pd.DataFrame({
+#         "GeneID"  : counts.index.astype(str),
+#         "log2FC"  : log2fc,
+#         "pval"    : pvals,
+#         "pval_adj": pvals_adj,
+#     }).reset_index(drop=True)
+#
+#     filtered_genes = filtered_genes.copy()
+#     filtered_genes["GeneID"] = filtered_genes["GeneID"].astype(str)
+#     filtered_genes = filtered_genes.merge(stat_df, on="GeneID", how="left")
+#
+#     print(f"Genes tested: {len(stat_df)}")
+#     print(f"Raw p < 0.05: {(stat_df['pval'] < 0.05).sum()}")
+#     print(f"Adj p < 0.05: {(stat_df['pval_adj'] < 0.05).sum()}")
+#
+#     return filtered_genes, counts
+
 def compute_differential_expression(
     counts_path: str,
     filtered_genes: pd.DataFrame,
     resistant_gsm: list,
     sensitive_gsm: list,
-) -> pd.DataFrame:
-    """
-    For every gene that survived the TPM filter, run a Mann-Whitney U test
-    (Sensitive vs Resistant) and calculate log2FC.  Applies BH correction.
+) -> tuple[pd.DataFrame, pd.DataFrame]:
 
-    Returns
-    -------
-    filtered_genes : input DataFrame extended with log2FC, pval, pval_adj
-    counts         : expression matrix (genes × samples) used for the test
-    """
+    # 1. Load RAW counts (not TPM)
     counts = pd.read_csv(counts_path, sep="\t")
     counts = counts[counts["GeneID"].isin(filtered_genes["GeneID"])].set_index("GeneID")
 
+    # 2. Keep only relevant samples
     res_cols = [c for c in counts.columns if c in resistant_gsm]
     sen_cols = [c for c in counts.columns if c in sensitive_gsm]
-    print(f"Resistant columns: {len(res_cols)}  |  Sensitive columns: {len(sen_cols)}")
+    counts   = counts[res_cols + sen_cols]
 
-    pvals, log2fc = [], []
+    # 3. Build sample metadata table
+    metadata = pd.DataFrame({
+        "condition": ["Resistant"] * len(res_cols) + ["Sensitive"] * len(sen_cols)
+    }, index=res_cols + sen_cols)
 
-    for gene in counts.index:
-        res_expr = counts.loc[gene, res_cols].values.astype(float)
-        sen_expr = counts.loc[gene, sen_cols].values.astype(float)
+    # 4. DESeq2 — counts must be samples × genes
+    inference = DefaultInference(n_cpus=4)
+    dds = DeseqDataSet(
+        counts=counts.T.astype(int),   # transpose: rows=samples, cols=genes
+        metadata=metadata,
+        design_factors="condition",
+        ref_level=["condition", "Resistant"],   # Resistant is the reference
+        inference=inference,
+    )
+    dds.deseq2()
 
-        fc = np.log2((np.mean(sen_expr) + EPS) / (np.mean(res_expr) + EPS))
-        log2fc.append(fc)
+    # 5. Extract results (Sensitive vs Resistant)
+    #stat_res = DeseqStats(dds, inference=inference)
+    stat_res = DeseqStats(
+    dds,
+    contrast=["condition", "Sensitive", "Resistant"],
+    inference=inference,
+    ) 
+    stat_res.summary()
 
-        try:
-            _, p = mannwhitneyu(sen_expr, res_expr, alternative="two-sided")
-        except ValueError:
-            p = 1.0
-        pvals.append(p)
+    results = stat_res.results_df.reset_index()
+    results.columns = ["GeneID", "baseMean", "log2FC", "lfcSE", "stat", "pval", "pval_adj"]
+    results["GeneID"] = results["GeneID"].astype(str)
 
-    _, pvals_adj, _, _ = multipletests(pvals, method="fdr_bh")
-
-    stat_df = pd.DataFrame({
-        "GeneID"  : counts.index.astype(str),
-        "log2FC"  : log2fc,
-        "pval"    : pvals,
-        "pval_adj": pvals_adj,
-    }).reset_index(drop=True)
-
+    # 6. Merge back into filtered_genes
     filtered_genes = filtered_genes.copy()
     filtered_genes["GeneID"] = filtered_genes["GeneID"].astype(str)
-    filtered_genes = filtered_genes.merge(stat_df, on="GeneID", how="left")
+    filtered_genes = filtered_genes.merge(
+        results[["GeneID", "log2FC", "pval", "pval_adj"]], on="GeneID", how="left"
+    )
 
-    print(f"Genes tested: {len(stat_df)}")
-    print(f"Raw p < 0.05: {(stat_df['pval'] < 0.05).sum()}")
-    print(f"Adj p < 0.05: {(stat_df['pval_adj'] < 0.05).sum()}")
+    print(f"Genes tested: {len(results)}")
+    print(f"Raw p < 0.05:  {(results['pval'] < 0.05).sum()}")
+    print(f"Adj p < 0.05:  {(results['pval_adj'] < 0.05).sum()}")
 
     return filtered_genes, counts
-
 
 # ---------------------------------------------------------------------------
 # 3.3  Volcano plot
@@ -183,8 +242,8 @@ def plot_volcano(
     ax.axvline(-fc_thresh,           color="black", linestyle="--", linewidth=0.8)
     ax.set_xlabel("log2 Fold Change (Sensitive vs Resistant)")
     ax.set_ylabel(f"-log10({p_label})")
-    ax.set_title(f"Volcano Plot: Sensitive vs Resistant"
-                 + (" (FDR-adjusted)" if use_adjusted else ""))
+    # ax.set_title(f"Volcano Plot: Sensitive vs Resistant"
+    #              + (" (FDR-adjusted)" if use_adjusted else ""))
     plt.tight_layout()
 
     if save_path:
@@ -242,7 +301,7 @@ def plot_pca(
         )
     ax.set_xlabel(f"PC1 ({pca.explained_variance_ratio_[0]*100:.1f}%)")
     ax.set_ylabel(f"PC2 ({pca.explained_variance_ratio_[1]*100:.1f}%)")
-    ax.set_title("PCA: " + " vs ".join(group_cols.keys()))
+    # ax.set_title("PCA: " + " vs ".join(group_cols.keys()))
     ax.legend()
     plt.tight_layout()
 
