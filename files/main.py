@@ -44,7 +44,7 @@ from step8_drug_interactions import (
 # Configuration — edit these paths to match your local file layout
 # ---------------------------------------------------------------------------
 CONFIG = {
-    "tpm_counts"   : "other_dataset/GSE162187_norm_counts_TPM_GRCh38.p13_NCBI.tsv",
+    "raw_counts"   : "other_dataset/GSE162187_norm_counts_TPM_GRCh38.p13_NCBI.tsv",
     "series_matrix": "other_dataset/GSE162187_series_matrix.txt",
     "string_links" : "other_dataset/9606.protein.links.v12.0.txt",
     "string_info"  : "other_dataset/9606.protein.info.v12.0.txt",
@@ -58,7 +58,7 @@ def main():
     print("=" * 60)
     print("STEP 1 — TPM filtering")
     print("=" * 60)
-    filtered_genes = filter_by_tpm(CONFIG["tpm_counts"])
+    filtered_genes = filter_by_tpm(CONFIG["raw_counts"])
     cache.save_df(filtered_genes, "step1_filtered_genes.parquet")
 
     # ------------------------------------------------------------------
@@ -94,7 +94,7 @@ def main():
     _, resistant_gsm, sensitive_gsm = parse_series_matrix(CONFIG["series_matrix"])
 
     filtered_genes, counts = compute_differential_expression(
-        counts_path=CONFIG["tpm_counts"],
+        counts_path=CONFIG["raw_counts"],
         filtered_genes=filtered_genes,
         resistant_gsm=resistant_gsm,
         sensitive_gsm=sensitive_gsm,
