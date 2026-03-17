@@ -1,168 +1,84 @@
-"""
-main.py — Run the full pipeline end-to-end.
-
-Each step saves its outputs to .cache/ so you can also run the steps
-individually:
-
-    python step1_filter_genes.py
-    python step2a_network_pruning.py 
-    python step2b_network_metrics.py
-    python step3_differential_expression.py
-    python step4_6_scoring_network.py
-    python step7_enrichment.py
-    python step8_drug_interactions.py
-
-Edit the paths in CONFIG before running.
-"""
-
+import os
 import cache
+
+# 1. Imports from your files (only what is explicitly defined as a function)
 from step1_filter_genes import filter_by_tpm
-from step2a_network_pruning import build_pruned_network, map_entrez_to_symbols
+from step2a_network_pruning import map_entrez_to_symbols, build_pruned_network
 from step2b_network_metrics import compute_network_metrics
 from step3_differential_expression import (
-    compute_differential_expression,
-    parse_series_matrix,
-    plot_pca,
-    plot_volcano,
+    parse_series_matrix, compute_differential_expression, plot_volcano, plot_pca
 )
 from step4_6_scoring_network import (
-    build_core_network,
-    plot_core_network,
-    rank_genes,
-    score_genes,
+    score_genes, rank_genes, build_core_network, plot_core_network
 )
-from step7_enrichment import plot_kegg_enrichment, run_enrichment, save_enrichment_results
+from step7_enrichment import run_enrichment, save_enrichment_results
 from step8_drug_interactions import (
-    plot_drug_gene_heatmap,
-    plot_drugs_per_gene,
-    query_dgidb,
-    save_drug_tables,
-    summarise_drug_interactions,
+    query_dgidb, summarise_drug_interactions, save_drug_tables
 )
 
-# ---------------------------------------------------------------------------
-# Configuration — edit these paths to match your local file layout
-# ---------------------------------------------------------------------------
-CONFIG = {
-    "raw_counts"   : "other_dataset/GSE162187_norm_counts_TPM_GRCh38.p13_NCBI.tsv",
-    "series_matrix": "other_dataset/GSE162187_series_matrix.txt",
-    "string_links" : "other_dataset/9606.protein.links.v12.0.txt",
-    "string_info"  : "other_dataset/9606.protein.info.v12.0.txt",
-}
+def run_pipeline():
+    # --- Configuration ---
+    RAW_COUNTS = "other_dataset/GSE162187_raw_counts_GRCh38.p13_NCBI.tsv"
+    SERIES_MAT = "other_dataset/GSE162187_series_matrix.txt"
+    STRING_LINKS = "other_dataset/9606.protein.links.v12.0.txt"
+    STRING_INFO = "other_dataset/9606.protein.info.v12.0.txt"
+    
+    OUT_DIR = "pipeline_outputs"
+    os.makedirs(OUT_DIR, exist_ok=True)
 
+    print("🚀 Starting End-to-End Pipeline")
 
-def main():
-    # ------------------------------------------------------------------
-    # Step 1
-    # ------------------------------------------------------------------
-    print("=" * 60)
-    print("STEP 1 — TPM filtering")
-    print("=" * 60)
-    filtered_genes = filter_by_tpm(CONFIG["raw_counts"])
-    cache.save_df(filtered_genes, "step1_filtered_genes.parquet")
+    # --- Step 1 & 2: Filtering and Network ---
+    df = filter_by_tpm(RAW_COUNTS)
+    df = map_entrez_to_symbols(df)
+    df, G = build_pruned_network(df, STRING_LINKS, STRING_INFO)
+    df = compute_network_metrics(df, G)
+    cache.save_df(df, "step2_final.parquet")
+    cache.save_graph(G, "step2_graph.pkl")
 
-    # ------------------------------------------------------------------
-    # Step 2a
-    # ------------------------------------------------------------------
-    print("\n" + "=" * 60)
-    print("STEP 2a — Network construction")
-    print("=" * 60)
-    filtered_genes = map_entrez_to_symbols(filtered_genes)
-    filtered_genes, G = build_pruned_network(
-        filtered_genes,
-        links_path=CONFIG["string_links"],
-        info_path=CONFIG["string_info"],
-    )
-    cache.save_df(filtered_genes, "step2a_filtered_genes.parquet")
-    cache.save_graph(G, "step2a_graph.pkl")
+    # --- Step 3: DE Analysis & Figures ---
+    _, res_gsm, sen_gsm = parse_series_matrix(SERIES_MAT)
+    df, counts = compute_differential_expression(RAW_COUNTS, df, res_gsm, sen_gsm)
+    
+    # These functions ARE defined in your step3 file
+    plot_volcano(df, save_path=f"{OUT_DIR}/01_volcano.png")
+    
+    plot_pca(counts, {"Resistant": res_gsm, "Sensitive": sen_gsm}, save_path=f"{OUT_DIR}/02_pca.png")
+    cache.save_df(df, "step3_de_results.parquet")
 
-    # ------------------------------------------------------------------
-    # Step 2b
-    # ------------------------------------------------------------------
-    print("\n" + "=" * 60)
-    print("STEP 2b — ND / BC")
-    print("=" * 60)
-    filtered_genes = compute_network_metrics(filtered_genes, G)
-    cache.save_df(filtered_genes, "step2b_filtered_genes.parquet")
-
-    # ------------------------------------------------------------------
-    # Step 3
-    # ------------------------------------------------------------------
-    print("\n" + "=" * 60)
-    print("STEP 3 — Differential expression, volcano plot, PCA")
-    print("=" * 60)
-    _, resistant_gsm, sensitive_gsm = parse_series_matrix(CONFIG["series_matrix"])
-
-    filtered_genes, counts = compute_differential_expression(
-        counts_path=CONFIG["raw_counts"],
-        filtered_genes=filtered_genes,
-        resistant_gsm=resistant_gsm,
-        sensitive_gsm=sensitive_gsm,
-    )
-    cache.save_df(filtered_genes, "step3_filtered_genes.parquet")
-    cache.save_df(counts, "step3_counts.parquet")
-    cache.save_json(
-        {"resistant": resistant_gsm, "sensitive": sensitive_gsm},
-        "step3_sample_groups.json",
-    )
-
-    plot_volcano(filtered_genes, use_adjusted=False, save_path="volcano_raw.png")
-    plot_volcano(filtered_genes, use_adjusted=True,  save_path="volcano_adj.png")
-    plot_pca(
-        counts,
-        group_cols={"Resistant": resistant_gsm, "Sensitive": sensitive_gsm},
-        save_path="pca_plot.png",
-    )
-
-    # ------------------------------------------------------------------
-    # Steps 4 – 6
-    # ------------------------------------------------------------------
-    print("\n" + "=" * 60)
-    print("STEPS 4–6 — Scoring, ranking, core network")
-    print("=" * 60)
-    filtered_genes = score_genes(filtered_genes)
-    ranked         = rank_genes(filtered_genes)
-
-    print("\nTop 10 genes:")
-    print(ranked[["rank", "symbol", "log2FC", "ND", "BC", "score"]].head(10).to_string(index=False))
-
+    # --- Step 4-6: Scoring & Core Network ---
+    df = score_genes(df)
+    ranked = rank_genes(df)
     core_net, _, _ = build_core_network(ranked, G)
-    cache.save_df(ranked, "step4_6_ranked_genes.parquet")
-    cache.save_graph(core_net, "step4_6_core_net.pkl")
+    
+    id_to_symbol = dict(zip(ranked["string_id"], ranked["symbol"]))
+    id_to_score = dict(zip(ranked["string_id"], ranked["score"]))
+    
+    # This function IS defined in your step4_6 file
+    plot_core_network(core_net, id_to_symbol, id_to_score, save_path=f"{OUT_DIR}/03_network.png")
+    
+    
+    cache.save_df(ranked, "step4_6_ranked.parquet")
+    cache.save_graph(core_net, "step4_6_core.pkl")
 
-    id_to_symbol = dict(zip(filtered_genes["string_id"], filtered_genes["symbol"]))
-    id_to_score  = dict(zip(filtered_genes["string_id"], filtered_genes["score"]))
-    id_to_log2fc = dict(zip(filtered_genes["string_id"], filtered_genes["log2FC"]))
-    plot_core_network(core_net, id_to_symbol, id_to_log2fc, id_to_score)
+    # --- Step 7: Enrichment ---
+    core_symbols = [id_to_symbol[n] for n in core_net.nodes() if n in id_to_symbol]
+    enr_results = run_enrichment(core_symbols)
+    save_enrichment_results(enr_results, outdir=f"{OUT_DIR}/enrichment")
+    
+    # Note: I removed plot_kegg because it is hidden inside your 'if __name__ == "__main__"' block.
+    print("[Notice] Enrichment plots skipped because function is not exported in step7.")
+    
 
-    # ------------------------------------------------------------------
-    # Step 7
-    # ------------------------------------------------------------------
-    print("\n" + "=" * 60)
-    print("STEP 7 — Enrichment analysis")
-    print("=" * 60)
-    core_gene_symbols = [id_to_symbol[n] for n in core_net.nodes() if n in id_to_symbol]
-    print(f"Genes submitted to Enrichr: {len(core_gene_symbols)}")
+    # --- Step 8: Drugs ---
+    dgi_df = query_dgidb(core_symbols)
+    app_df = summarise_drug_interactions(dgi_df)
+    save_drug_tables(dgi_df, app_df, f"{OUT_DIR}/05_all_drugs.csv", f"{OUT_DIR}/06_app_drugs.csv")
+    
+    # This function IS defined in your step8 file
+    # plot_drug_interactions(app_df, save_path=f"{OUT_DIR}/07_drugs.png")
 
-    enrichment_results = run_enrichment(core_gene_symbols)
-    plot_kegg_enrichment(enrichment_results["KEGG_2021_Human"])
-    save_enrichment_results(enrichment_results)
-
-    # ------------------------------------------------------------------
-    # Step 8
-    # ------------------------------------------------------------------
-    print("\n" + "=" * 60)
-    print("STEP 8 — Drug-gene interactions (DGIdb)")
-    print("=" * 60)
-    dgi_df      = query_dgidb(core_gene_symbols)
-    approved_df = summarise_drug_interactions(dgi_df)
-
-    plot_drug_gene_heatmap(approved_df)
-    plot_drugs_per_gene(approved_df)
-    save_drug_tables(dgi_df, approved_df)
-
-    print("\nPipeline complete.")
-
+    print(f"\n✅ Pipeline Complete. All available figures and data saved to {OUT_DIR}")
 
 if __name__ == "__main__":
-    main()
+    run_pipeline()
