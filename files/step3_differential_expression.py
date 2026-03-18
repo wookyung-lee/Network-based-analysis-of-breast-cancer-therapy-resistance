@@ -317,7 +317,7 @@ def plot_pca(
 
 if __name__ == "__main__":
     # Load step 2 output
-    filtered_genes = cache.load_df("step2a_filtered_genes.parquet")
+    filtered_genes = cache.load_df("step2b_filtered_genes.parquet")
 
     _, resistant_gsm, sensitive_gsm = parse_series_matrix(
         "other_dataset/GSE162187_series_matrix.txt"
