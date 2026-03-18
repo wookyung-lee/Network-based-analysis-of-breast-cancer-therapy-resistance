@@ -174,8 +174,8 @@ def plot_drug_gene_heatmap(
     ax.set_yticks(range(len(heat_data.index)))
     ax.set_yticklabels(heat_data.index, fontsize=9)
     plt.colorbar(im, ax=ax, label="Interaction score")
-    ax.set_title(f"Approved Drugs × Core-Network Genes (top {top_n_genes} targeted genes)")
-    plt.tight_layout()
+    # ax.set_title(f"Approved Drugs × Core-Network Genes (top {top_n_genes} targeted genes)")
+    # plt.tight_layout()
 
     if save_path:
         plt.savefig(save_path, dpi=150)
@@ -202,7 +202,7 @@ def plot_drugs_per_gene(
     fig, ax = plt.subplots(figsize=(8, max(4, len(drug_counts) * 0.38)))
     ax.barh(drug_counts.index[::-1], drug_counts.values[::-1], color="steelblue")
     ax.set_xlabel("Number of approved drugs")
-    ax.set_title("Core-Network Genes by Number of Approved Drug Interactions")
+    # ax.set_title("Core-Network Genes by Number of Approved Drug Interactions")
     plt.tight_layout()
 
     if save_path:
