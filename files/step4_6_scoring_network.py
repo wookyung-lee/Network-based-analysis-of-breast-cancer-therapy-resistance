@@ -174,7 +174,7 @@ def plot_core_network(
 if __name__ == "__main__":
     # Load step 2 and step 3 outputs
     filtered_genes = cache.load_df("step3_filtered_genes.parquet")
-    G              = cache.load_graph("step2_graph.pkl")
+    G              = cache.load_graph("step2a_graph.pkl")
 
     filtered_genes = score_genes(filtered_genes)
     ranked         = rank_genes(filtered_genes)
