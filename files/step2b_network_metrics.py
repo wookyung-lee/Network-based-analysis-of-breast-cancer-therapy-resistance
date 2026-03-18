@@ -49,7 +49,7 @@ def compute_network_metrics(
     bc = (
         nx.betweenness_centrality(G, normalized=True)
         if bc_k is None
-        else nx.betweenness_centrality(G, k=bc_k, normalized=True)
+        else nx.betweenness_centrality(G, k=bc_k, normalized=True, seed = 42)
     )
 
     filtered_genes = filtered_genes.copy()
