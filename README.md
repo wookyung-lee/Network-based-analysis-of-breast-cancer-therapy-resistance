@@ -1,7 +1,7 @@
 # Network-based-analysis-of-melanoma-therapy-resistance
 Project from the Course "Introduction to simulation, network and data analysis in Medical Systems Biology (WS2526)"
 
-Datasets: \\
+Datasets: \
 
 1. Dataset relevant for step 1 (TPM):
 GSE78220_norm_counts_TPM_GRCh38.p13_NCBI.tsv.gz
