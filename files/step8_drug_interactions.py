@@ -1,21 +1,25 @@
 """
-Step 8. Find drugs targeting genes in the core network using DGIdb.
+Step 8. Find drugs targeting genes — two gene sets:
+
+  A) Core network genes (scored pipeline, Steps 4-6)
+  B) Significant DEGs from the volcano plot (padj < 0.05, |log2FC| > 1)
 
 Queries the DGIdb GraphQL API in batches to avoid URL-size limits.
 Saves all interactions and approved-drug interactions to CSV.
-Generates:
-  - a heatmap  : approved drugs × top-20 most-targeted genes
-  - a bar chart: number of approved drugs per core-network gene
+Generates heatmaps and bar charts for both gene sets.
 
 Loads
 -----
 .cache/step4_6_core_net.pkl
-.cache/step4_6_ranked_genes.parquet   (for id → symbol mapping)
+.cache/step4_6_ranked_genes.parquet
+.cache/step3_sig_genes.parquet
 
 Saves
 -----
-drug_gene_interactions_all.csv
-drug_gene_interactions_approved.csv
+drug_gene_interactions_core_all.csv
+drug_gene_interactions_core_approved.csv
+drug_gene_interactions_sig_all.csv
+drug_gene_interactions_sig_approved.csv
 """
 
 import time
@@ -117,10 +121,10 @@ def query_dgidb(
 
 
 # ---------------------------------------------------------------------------
-# 8.2  Summarise and plot
+# 8.2  Summarise
 # ---------------------------------------------------------------------------
 
-def summarise_drug_interactions(dgi_df: pd.DataFrame) -> pd.DataFrame:
+def summarise_drug_interactions(dgi_df: pd.DataFrame, label: str = "") -> pd.DataFrame:
     """Print a summary and return only approved-drug rows."""
     if dgi_df.empty:
         print("No interactions found. Verify that gene symbols are official HGNC symbols.")
@@ -132,23 +136,30 @@ def summarise_drug_interactions(dgi_df: pd.DataFrame) -> pd.DataFrame:
         .sort_values("interaction_score", ascending=False)
     )
 
-    print(f"Total drug-gene pairs          : {len(dgi_df)}")
-    print(f"Approved-drug pairs            : {len(approved_df)}")
-    print(f"Unique approved drugs          : {approved_df['drug'].nunique()}")
-    print(f"Core-network genes with a drug : {approved_df['gene'].nunique()}")
-    print("\nTop 20 (by interaction score):")
+    tag = f" [{label}]" if label else ""
+    print(f"Total drug-gene pairs{tag}          : {len(dgi_df)}")
+    print(f"Approved-drug pairs{tag}            : {len(approved_df)}")
+    print(f"Unique approved drugs{tag}          : {approved_df['drug'].nunique()}")
+    print(f"Genes with an approved drug{tag}    : {approved_df['gene'].nunique()}")
+    print(f"\nTop 20 (by interaction score){tag}:")
     print(approved_df[["gene", "drug", "interaction_score"]].head(20).to_string(index=False))
 
     return approved_df
 
 
+# ---------------------------------------------------------------------------
+# 8.3  Plots
+# ---------------------------------------------------------------------------
+
 def plot_drug_gene_heatmap(
     approved_df: pd.DataFrame,
+    title: str = "Approved Drugs × Genes",
     top_n_genes: int = 20,
     save_path: str | None = "drug_gene_heatmap.png",
 ) -> None:
-    """Heatmap: approved drugs × most-targeted core-network genes."""
+    """Heatmap: approved drugs × most-targeted genes."""
     if approved_df.empty:
+        print(f"  No approved interactions to plot for: {title}")
         return
 
     top_targeted = (
@@ -174,22 +185,24 @@ def plot_drug_gene_heatmap(
     ax.set_yticks(range(len(heat_data.index)))
     ax.set_yticklabels(heat_data.index, fontsize=9)
     plt.colorbar(im, ax=ax, label="Interaction score")
-    # ax.set_title(f"Approved Drugs × Core-Network Genes (top {top_n_genes} targeted genes)")
+    # ax.set_title(title)
     plt.tight_layout()
 
     if save_path:
         plt.savefig(save_path, dpi=150)
-        print(f"Saved: {save_path}")
+        print(f"  Saved: {save_path}")
     plt.show()
 
 
 def plot_drugs_per_gene(
     approved_df: pd.DataFrame,
+    title: str = "Genes by Number of Approved Drug Interactions",
     top_n: int = 25,
     save_path: str | None = "drugs_per_gene.png",
 ) -> None:
-    """Bar chart: number of approved drugs per core-network gene."""
+    """Bar chart: number of approved drugs per gene."""
     if approved_df.empty:
+        print(f"  No approved interactions to plot for: {title}")
         return
 
     drug_counts = (
@@ -202,12 +215,12 @@ def plot_drugs_per_gene(
     fig, ax = plt.subplots(figsize=(8, max(4, len(drug_counts) * 0.38)))
     ax.barh(drug_counts.index[::-1], drug_counts.values[::-1], color="steelblue")
     ax.set_xlabel("Number of approved drugs")
-    # ax.set_title("Core-Network Genes by Number of Approved Drug Interactions")
+    # ax.set_title(title)
     plt.tight_layout()
 
     if save_path:
         plt.savefig(save_path, dpi=150)
-        print(f"Saved: {save_path}")
+        print(f"  Saved: {save_path}")
     plt.show()
 
 
@@ -219,8 +232,8 @@ def save_drug_tables(
 ) -> None:
     dgi_df.to_csv(all_path, index=False)
     approved_df.to_csv(approved_path, index=False)
-    print(f"Saved: {all_path}")
-    print(f"Saved: {approved_path}")
+    print(f"  Saved: {all_path}")
+    print(f"  Saved: {approved_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -228,17 +241,93 @@ def save_drug_tables(
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    # Load step 4-6 outputs
+
+    # ── A. Core network drug analysis ─────────────────────────────────────────
+    print("=" * 60)
+    print("A. Drug Analysis: Core Network Genes")
+    print("=" * 60)
+
     core_net = cache.load_graph("step4_6_core_net.pkl")
     ranked   = cache.load_df("step4_6_ranked_genes.parquet")
 
-    id_to_symbol     = dict(zip(ranked["string_id"], ranked["symbol"]))
+    id_to_symbol      = dict(zip(ranked["string_id"], ranked["symbol"]))
     core_gene_symbols = [id_to_symbol[n] for n in core_net.nodes() if n in id_to_symbol]
 
-    print(f"Querying DGIdb for {len(core_gene_symbols)} genes ...")
-    dgi_df      = query_dgidb(core_gene_symbols)
-    approved_df = summarise_drug_interactions(dgi_df)
+    print(f"Querying DGIdb for {len(core_gene_symbols)} core-network genes ...")
+    dgi_core      = query_dgidb(core_gene_symbols)
+    approved_core = summarise_drug_interactions(dgi_core, label="core network")
 
-    plot_drug_gene_heatmap(approved_df)
-    plot_drugs_per_gene(approved_df)
-    save_drug_tables(dgi_df, approved_df)
+    plot_drug_gene_heatmap(
+        approved_core,
+        title="Approved Drugs × Core-Network Genes (top 20)",
+        save_path="drug_gene_heatmap_core.png",
+    )
+    plot_drugs_per_gene(
+        approved_core,
+        title="Core-Network Genes by Number of Approved Drug Interactions",
+        save_path="drugs_per_gene_core.png",
+    )
+    save_drug_tables(
+        dgi_core, approved_core,
+        all_path="drug_gene_interactions_core_all.csv",
+        approved_path="drug_gene_interactions_core_approved.csv",
+    )
+
+    # ── B. Significant DEG drug analysis ──────────────────────────────────────
+    print("\n" + "=" * 60)
+    print("B. Drug Analysis: Significant Volcano DEGs")
+    print("=" * 60)
+
+    sig_genes = cache.load_df("step3_sig_genes.parquet")
+    sig_symbols = sig_genes["symbol"].dropna().tolist()
+
+    print(f"Querying DGIdb for {len(sig_symbols)} significant DEGs ...")
+    dgi_sig      = query_dgidb(sig_symbols)
+    approved_sig = summarise_drug_interactions(dgi_sig, label="sig DEGs")
+
+    plot_drug_gene_heatmap(
+        approved_sig,
+        title="Approved Drugs × Significant DEGs (top 20)",
+        save_path="drug_gene_heatmap_sig.png",
+    )
+    plot_drugs_per_gene(
+        approved_sig,
+        title="Significant DEGs by Number of Approved Drug Interactions",
+        save_path="drugs_per_gene_sig.png",
+    )
+    save_drug_tables(
+        dgi_sig, approved_sig,
+        all_path="drug_gene_interactions_sig_all.csv",
+        approved_path="drug_gene_interactions_sig_approved.csv",
+    )
+
+    # ── B1. Split by direction ─────────────────────────────────────────────────
+    print("\n--- Split by direction ---")
+    for direction, label, color in [
+        ("up_in_sensitive", "Up in Sensitive", "Reds"),
+        ("up_in_resistant", "Up in Resistant", "Blues"),
+    ]:
+        genes = sig_genes[sig_genes["direction"] == direction]["symbol"].dropna().tolist()
+        if not genes:
+            print(f"No genes for {direction}, skipping.")
+            continue
+
+        print(f"\nQuerying DGIdb for {len(genes)} genes ({label}) ...")
+        dgi_dir      = query_dgidb(genes)
+        approved_dir = summarise_drug_interactions(dgi_dir, label=label)
+
+        plot_drug_gene_heatmap(
+            approved_dir,
+            title=f"Approved Drugs × {label} Genes",
+            save_path=f"drug_gene_heatmap_{direction}.png",
+        )
+        plot_drugs_per_gene(
+            approved_dir,
+            title=f"{label} Genes — Approved Drug Interactions",
+            save_path=f"drugs_per_gene_{direction}.png",
+        )
+        save_drug_tables(
+            dgi_dir, approved_dir,
+            all_path=f"drug_gene_interactions_{direction}_all.csv",
+            approved_path=f"drug_gene_interactions_{direction}_approved.csv",
+        )

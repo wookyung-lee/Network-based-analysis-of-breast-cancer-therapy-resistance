@@ -153,6 +153,7 @@ def plot_core_network(
     )
 
     plt.colorbar(sc, ax=ax, label="log2FC  (red = higher in Sensitive, blue = higher in Resistant)")
+    print(f"Core Network — {core_net.number_of_nodes()} nodes, {core_net.number_of_edges()} edges")
     # ax.set_title(
     #     f"Core Network — {core_net.number_of_nodes()} nodes, "
     #     f"{core_net.number_of_edges()} edges\nNode size ∝ score",
@@ -172,7 +173,7 @@ def plot_core_network(
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    # Load step 2 and step 3 outputs
+    # Load step 2b and step 3 outputs
     filtered_genes = cache.load_df("step3_filtered_genes.parquet")
     G              = cache.load_graph("step2a_graph.pkl")
 
@@ -194,3 +195,154 @@ if __name__ == "__main__":
 
     print("\nGenes in core network:", sorted(id_to_symbol.get(n, n) for n in core_net.nodes()))
     plot_core_network(core_net, id_to_symbol, id_to_log2fc, id_to_score)
+
+
+# ---------------------------------------------------------------------------
+# Step 6.2 — Significant-DEG network
+# ---------------------------------------------------------------------------
+
+def build_sig_network(
+    sig_genes: pd.DataFrame,
+    G: nx.Graph,
+) -> nx.Graph:
+    """
+    Build a subgraph from only the significant DEGs (volcano points).
+    Isolated nodes are pruned. No minimum size requirement — we take
+    whatever the data gives us.
+
+    Parameters
+    ----------
+    sig_genes : DataFrame from step3 get_significant_genes()
+                must have 'string_id' and 'direction' columns
+    G         : full pruned STRING graph from step 2a
+
+    Returns
+    -------
+    sig_net : pruned NetworkX subgraph
+    """
+    sig_ids    = set(sig_genes["string_id"].dropna())
+    sub        = G.subgraph(sig_ids).copy()
+    singletons = [n for n, deg in sub.degree() if deg == 0]
+    sub.remove_nodes_from(singletons)
+
+    print(f"Significant DEG network: {sub.number_of_nodes()} nodes, "
+          f"{sub.number_of_edges()} edges "
+          f"({len(singletons)} singletons removed)")
+    return sub
+
+
+def plot_sig_network(
+    sig_net: nx.Graph,
+    sig_genes: pd.DataFrame,
+    id_to_symbol: dict,
+    save_path: str | None = "sig_network.png",
+) -> None:
+    """
+    Visualise the significant-DEG network.
+
+    Node colour : direction — red = up in Sensitive, blue = up in Resistant
+    Node size   : |log2FC|  (larger = bigger fold change)
+    """
+    # Build lookup dicts from sig_genes
+    id_to_fc        = dict(zip(sig_genes["string_id"], sig_genes["log2FC"]))
+    id_to_direction = dict(zip(sig_genes["string_id"], sig_genes["direction"]))
+
+    node_list  = list(sig_net.nodes())
+    node_colors = [
+        "red" if id_to_direction.get(n) == "up_in_sensitive" else "steelblue"
+        for n in node_list
+    ]
+    node_sizes = [
+        200 + 300 * abs(id_to_fc.get(n, 0))
+        for n in node_list
+    ]
+
+    fig, ax = plt.subplots(figsize=(14, 14))
+    pos = nx.spring_layout(sig_net, seed=42, k=1.0)
+
+    nx.draw_networkx_nodes(
+        sig_net, pos,
+        nodelist=node_list,
+        node_color=node_colors,
+        node_size=node_sizes,
+        alpha=0.85, ax=ax,
+    )
+    nx.draw_networkx_edges(sig_net, pos, alpha=0.25, width=0.8, ax=ax)
+    nx.draw_networkx_labels(
+        sig_net, pos,
+        labels={n: id_to_symbol.get(n, n) for n in node_list},
+        font_size=7, font_weight="bold", ax=ax,
+    )
+
+    # Manual legend
+    from matplotlib.patches import Patch
+    legend_elements = [
+        Patch(facecolor="red",       label="Up in Sensitive"),
+        Patch(facecolor="steelblue", label="Up in Resistant"),
+    ]
+    # ax.legend(handles=legend_elements, loc="upper left", fontsize=10)
+    print(f"Significant DEG Network — {sig_net.number_of_nodes()} nodes, {sig_net.number_of_edges()} edges")
+    # ax.set_title(
+    #     f"Significant DEG Network — {sig_net.number_of_nodes()} nodes, "
+    #     f"{sig_net.number_of_edges()} edges\nNode size ∝ |log2FC|",
+    #     fontsize=13,
+    # )
+    ax.axis("off")
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=150)
+        print(f"Saved: {save_path}")
+    plt.show()
+
+
+# ---------------------------------------------------------------------------
+# Re-run entry point to also build the sig network (append to existing run)
+# ---------------------------------------------------------------------------
+
+def run_sig_network():
+    """Call this after the main scoring pipeline to add the sig-DEG network."""
+    sig_genes = cache.load_df("step3_sig_genes.parquet")
+    G         = cache.load_graph("step2a_graph.pkl")
+    ranked    = cache.load_df("step4_6_ranked_genes.parquet")
+
+    # Need string_id in sig_genes — merge from ranked
+    if "string_id" not in sig_genes.columns:
+        id_map    = ranked[["symbol", "string_id"]].drop_duplicates()
+        sig_genes = sig_genes.merge(id_map, on="symbol", how="left")
+
+    sig_net = build_sig_network(sig_genes, G)
+    cache.save_graph(sig_net, "step4_6_sig_net.pkl")
+
+    id_to_symbol = dict(zip(ranked["string_id"], ranked["symbol"]))
+    plot_sig_network(sig_net, sig_genes, id_to_symbol)
+
+    return sig_net
+
+
+if __name__ == "__main__":
+    # ── existing scored core network ──────────────────────────────────────────
+    filtered_genes = cache.load_df("step3_filtered_genes.parquet")
+    G              = cache.load_graph("step2a_graph.pkl")
+
+    filtered_genes = score_genes(filtered_genes)
+    ranked         = rank_genes(filtered_genes)
+
+    print("\nTop 10 genes:")
+    print(ranked[["rank", "symbol", "log2FC", "ND", "BC", "score"]].head(10).to_string(index=False))
+
+    core_net, _, _ = build_core_network(ranked, G)
+
+    cache.save_df(ranked, "step4_6_ranked_genes.parquet")
+    cache.save_graph(core_net, "step4_6_core_net.pkl")
+
+    id_to_symbol = dict(zip(filtered_genes["string_id"], filtered_genes["symbol"]))
+    id_to_score  = dict(zip(filtered_genes["string_id"], filtered_genes["score"]))
+    id_to_log2fc = dict(zip(filtered_genes["string_id"], filtered_genes["log2FC"]))
+
+    print("\nGenes in core network:", sorted(id_to_symbol.get(n, n) for n in core_net.nodes()))
+    plot_core_network(core_net, id_to_symbol, id_to_log2fc, id_to_score)
+
+    # ── significant DEG network ───────────────────────────────────────────────
+    print("\n--- Building Significant DEG Network ---")
+    run_sig_network()

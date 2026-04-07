@@ -15,13 +15,14 @@ PCA                : principal component analysis — checks whether samples
 
 Loads
 -----
-.cache/step2_filtered_genes.parquet
+.cache/step2b_filtered_genes.parquet
 
 Saves
 -----
 .cache/step3_filtered_genes.parquet   (with log2FC, pval, pval_adj columns added)
 .cache/step3_counts.parquet           (expression matrix used for testing)
 .cache/step3_sample_groups.json       (resistant_gsm and sensitive_gsm lists)
+.cache/step3_sig_genes.parquet        (significant DEGs from volcano)
 """
 
 import re
@@ -83,64 +84,8 @@ def parse_series_matrix(filepath: str) -> tuple[dict, list, list]:
 
 
 # ---------------------------------------------------------------------------
-# 3.2  Differential expression — p-values and log2FC
+# 3.2  Differential expression — pydeseq2
 # ---------------------------------------------------------------------------
-
-# def compute_differential_expression(
-#     counts_path: str,
-#     filtered_genes: pd.DataFrame,
-#     resistant_gsm: list,
-#     sensitive_gsm: list,
-# ) -> pd.DataFrame:
-#     """
-#     For every gene that survived the TPM filter, run a Mann-Whitney U test
-#     (Sensitive vs Resistant) and calculate log2FC.  Applies BH correction.
-#
-#     Returns
-#     -------
-#     filtered_genes : input DataFrame extended with log2FC, pval, pval_adj
-#     counts         : expression matrix (genes × samples) used for the test
-#     """
-#     counts = pd.read_csv(counts_path, sep="\t")
-#     counts = counts[counts["GeneID"].isin(filtered_genes["GeneID"])].set_index("GeneID")
-#
-#     res_cols = [c for c in counts.columns if c in resistant_gsm]
-#     sen_cols = [c for c in counts.columns if c in sensitive_gsm]
-#     print(f"Resistant columns: {len(res_cols)}  |  Sensitive columns: {len(sen_cols)}")
-#
-#     pvals, log2fc = [], []
-#
-#     for gene in counts.index:
-#         res_expr = counts.loc[gene, res_cols].values.astype(float)
-#         sen_expr = counts.loc[gene, sen_cols].values.astype(float)
-#
-#         fc = np.log2((np.mean(sen_expr) + EPS) / (np.mean(res_expr) + EPS))
-#         log2fc.append(fc)
-#
-#         try:
-#             _, p = mannwhitneyu(sen_expr, res_expr, alternative="two-sided")
-#         except ValueError:
-#             p = 1.0
-#         pvals.append(p)
-#
-#     _, pvals_adj, _, _ = multipletests(pvals, method="fdr_bh")
-#
-#     stat_df = pd.DataFrame({
-#         "GeneID"  : counts.index.astype(str),
-#         "log2FC"  : log2fc,
-#         "pval"    : pvals,
-#         "pval_adj": pvals_adj,
-#     }).reset_index(drop=True)
-#
-#     filtered_genes = filtered_genes.copy()
-#     filtered_genes["GeneID"] = filtered_genes["GeneID"].astype(str)
-#     filtered_genes = filtered_genes.merge(stat_df, on="GeneID", how="left")
-#
-#     print(f"Genes tested: {len(stat_df)}")
-#     print(f"Raw p < 0.05: {(stat_df['pval'] < 0.05).sum()}")
-#     print(f"Adj p < 0.05: {(stat_df['pval_adj'] < 0.05).sum()}")
-#
-#     return filtered_genes, counts
 
 def compute_differential_expression(
     counts_path: str,
@@ -158,12 +103,17 @@ def compute_differential_expression(
     sen_cols = [c for c in counts.columns if c in sensitive_gsm]
     counts   = counts[res_cols + sen_cols]
 
+    # Remove genes with zero counts in any sample — causes null pointer in DESeq2 internals
+    before = len(counts)
+    counts = counts.loc[(counts > 0).all(axis=1)]
+    print(f"Genes after zero-count filter: {len(counts)} (removed {before - len(counts)})")
+
     # 3. Build sample metadata table
     metadata = pd.DataFrame({
         "condition": ["Resistant"] * len(res_cols) + ["Sensitive"] * len(sen_cols)
     }, index=res_cols + sen_cols)
 
-    # 4. DESeq2 — counts must be samples × genes
+    # 4. DESeq2 — counts must be samples x genes
     inference = DefaultInference(n_cpus=4)
     dds = DeseqDataSet(
         counts=counts.T.astype(int),   # transpose: rows=samples, cols=genes
@@ -175,12 +125,11 @@ def compute_differential_expression(
     dds.deseq2()
 
     # 5. Extract results (Sensitive vs Resistant)
-    #stat_res = DeseqStats(dds, inference=inference)
     stat_res = DeseqStats(
-    dds,
-    contrast=["condition", "Sensitive", "Resistant"],
-    inference=inference,
-    ) 
+        dds,
+        contrast=["condition", "Sensitive", "Resistant"],
+        inference=inference,
+    )
     stat_res.summary()
 
     results = stat_res.results_df.reset_index()
@@ -199,6 +148,7 @@ def compute_differential_expression(
     print(f"Adj p < 0.05:  {(results['pval_adj'] < 0.05).sum()}")
 
     return filtered_genes, counts
+
 
 # ---------------------------------------------------------------------------
 # 3.3  Volcano plot
@@ -221,7 +171,7 @@ def plot_volcano(
     p_thresh     : p-value threshold for colouring (default 0.05)
     save_path    : file path to save the figure; None = do not save
     """
-    p_col  = "pval_adj" if use_adjusted else "pval"
+    p_col   = "pval_adj" if use_adjusted else "pval"
     p_label = "adj. p-value" if use_adjusted else "p-value"
 
     y = -np.log10(filtered_genes[p_col] + EPS)
@@ -242,8 +192,6 @@ def plot_volcano(
     ax.axvline(-fc_thresh,           color="black", linestyle="--", linewidth=0.8)
     ax.set_xlabel("log2 Fold Change (Sensitive vs Resistant)")
     ax.set_ylabel(f"-log10({p_label})")
-    # ax.set_title(f"Volcano Plot: Sensitive vs Resistant"
-    #              + (" (FDR-adjusted)" if use_adjusted else ""))
     plt.tight_layout()
 
     if save_path:
@@ -258,7 +206,7 @@ def plot_volcano(
 
 def plot_pca(
     counts: pd.DataFrame,
-    group_cols: dict,          # e.g. {"Resistant": [...], "Sensitive": [...]}
+    group_cols: dict,
     group_colors: dict | None = None,
     save_path: str | None = None,
 ) -> None:
@@ -267,7 +215,7 @@ def plot_pca(
 
     Parameters
     ----------
-    counts       : gene × sample expression DataFrame (index = GeneID)
+    counts       : gene x sample expression DataFrame (index = GeneID)
     group_cols   : {label: [sample_col_names]}
     group_colors : {label: colour_string}; auto-assigned if None
     save_path    : optional output path
@@ -301,7 +249,6 @@ def plot_pca(
         )
     ax.set_xlabel(f"PC1 ({pca.explained_variance_ratio_[0]*100:.1f}%)")
     ax.set_ylabel(f"PC2 ({pca.explained_variance_ratio_[1]*100:.1f}%)")
-    # ax.set_title("PCA: " + " vs ".join(group_cols.keys()))
     ax.legend()
     plt.tight_layout()
 
@@ -312,11 +259,50 @@ def plot_pca(
 
 
 # ---------------------------------------------------------------------------
+# 3.5  Extract significant genes from volcano
+# ---------------------------------------------------------------------------
+
+def get_significant_genes(
+    filtered_genes: pd.DataFrame,
+    fc_thresh: float = 1.0,
+    p_thresh: float = 0.05,
+) -> pd.DataFrame:
+    """
+    Extract genes that pass both the fold-change and adjusted p-value thresholds.
+    These correspond to the coloured points in the volcano plot.
+
+    Parameters
+    ----------
+    fc_thresh : |log2FC| minimum (default 1)
+    p_thresh  : adjusted p-value maximum (default 0.05)
+
+    Returns
+    -------
+    sig : DataFrame with a 'direction' column:
+          'up_in_sensitive' (red) or 'up_in_resistant' (blue)
+    """
+    sig = filtered_genes[
+        (filtered_genes["pval_adj"] < p_thresh) &
+        (filtered_genes["log2FC"].abs() > fc_thresh)
+    ].copy()
+
+    sig["direction"] = np.where(
+        sig["log2FC"] > 0, "up_in_sensitive", "up_in_resistant"
+    )
+
+    print(f"Significant genes (padj < {p_thresh}, |log2FC| > {fc_thresh}): {len(sig)}")
+    print(f"  Up in Sensitive (red) : {(sig['direction'] == 'up_in_sensitive').sum()}")
+    print(f"  Up in Resistant (blue): {(sig['direction'] == 'up_in_resistant').sum()}")
+    print(sig[["symbol", "log2FC", "pval_adj", "direction"]].sort_values("log2FC").to_string(index=False))
+
+    return sig
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    # Load step 2 output
     filtered_genes = cache.load_df("step2b_filtered_genes.parquet")
 
     _, resistant_gsm, sensitive_gsm = parse_series_matrix(
@@ -346,3 +332,7 @@ if __name__ == "__main__":
         group_cols={"Resistant": resistant_gsm, "Sensitive": sensitive_gsm},
         save_path="pca_plot.png",
     )
+
+    # Extract and save significant volcano genes for downstream enrichment
+    sig_genes = get_significant_genes(filtered_genes)
+    cache.save_df(sig_genes, "step3_sig_genes.parquet")
